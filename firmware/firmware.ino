@@ -1,26 +1,74 @@
 #include <WiFi.h>
 
+#include "esp_log.h"
+#include "esp_system.h"
+#include "time.h"
+#include <vector>
+#include <TimeAlarms.h>
+
+#include "web_request_to_bees_thermometer.h"
+
 // указываем пины, к которым подключены светодиоды
 #define LED_BLUE 2
 
 const char* ssid = "AndroidAPEB55";
 const char* password = "pvtq4802";
 
+std::vector<float> localTemperatureLog;
+
 // инициализируем сервер на 80 порте
 WiFiServer server(80);
-// создаем буфер и счетчик для буфера
-char lineBuf[80];
-int charCount = 0;
+
+const char* ntpServer1 = "ntp7.ntp-servers.net";
+const char* ntpServer2 = "ntp6.ntp-servers.net";
+const long  gmtOffset_sec = 7 * 3600;
+const int   daylightOffset_sec = 0;
+
+uint32_t measuringInterval_sec = 5;
+
+hw_timer_t *My_timer = NULL;
+
+void printLocalTime() {
+  struct tm timeinfo;
+  
+  if(!getLocalTime(&timeinfo)){
+    Serial.println("No time available (yet)");
+    return;
+  }
+  
+  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+}
+
+// Callback function (get's called when time adjusts via NTP)
+void timeAvailable(struct timeval *t) {
+  Serial.println("Got time adjustment from NTP!");
+  printLocalTime();
+}
+
+void measureTemperature(){
+  digitalWrite(LED_BLUE, !digitalRead(LED_BLUE));
+  printLocalTime();
+}
  
 void setup() {
-    // запас времени на открытие монитора порта — 5 секунд
-    delay(5000);
-    
-    // инициализируем контакты для светодиодов
     pinMode(LED_BLUE, OUTPUT);
     
     // инициализируем монитор порта
     Serial.begin(115200);
+
+    setTime(8,29,0,1,1,11);
+
+    //Настройка часов
+    sntp_set_time_sync_notification_cb( timeAvailable );
+    //sntp_servermode_dhcp(1);
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
+
+//    My_timer = timerBegin(0, 80, true);
+//    timerAttachInterrupt(My_timer, &onTimer, true);
+//    timerAlarmWrite(My_timer, measuringIntervalInMicroseconds, true);
+//    timerAlarmEnable(My_timer); //Just Enable
+
+    Alarm.timerRepeat(measuringInterval_sec, measureTemperature);
     
     // подключаемся к Wi-Fi сети
     Serial.println();
@@ -30,7 +78,7 @@ void setup() {
     
     WiFi.begin(ssid, password);
     while(WiFi.status() != WL_CONNECTED) {
-        delay(500);
+        Alarm.delay(500);
         Serial.print(".");
     }
     
@@ -40,82 +88,22 @@ void setup() {
     
     // пишем IP-адрес в монитор порта   
     Serial.println(WiFi.localIP());
+
+    //кэш на неделю измерений каждые 30 секунд
+    localTemperatureLog.reserve(20160);
+    localTemperatureLog.push_back(10);
     
     server.begin();
 }
- 
+
 void loop() {
     // анализируем канал связи на наличие входящих клиентов
     WiFiClient client = server.available();
     if (client) {
         Serial.println("New client");  
-        memset(lineBuf, 0, sizeof(lineBuf));
-        charCount = 0;
-        // HTTP-запрос заканчивается пустой строкой
-        boolean currentLineIsBlank = true;
-        while (client.connected()) {
-            if (client.available()) {
-                char c = client.read();
-                Serial.write(c);
-                // считываем HTTP-запрос
-                lineBuf[charCount] = c;
-                if (charCount < sizeof(lineBuf) - 1) {
-                    charCount++;
-                }
-                // на символ конца строки отправляем ответ
-                if (c == '\n' && currentLineIsBlank) {
-                    // отправляем стандартный заголовок HTTP-ответа
-                    client.println("HTTP/1.1 200 OK");
-                    client.println("Content-Type: text/html");
-                    // тип контента: text/html
-                    client.println("Connection: close");
-                    // после отправки ответа связь будет отключена
-                    client.println();
-                    // формируем веб-страницу 
-                    String webPage = "<!DOCTYPE HTML>";
-                    webPage +="<html>";
-                    webPage +="  <head>";
-                    webPage +="    <meta name=\"viewport\" content=\"width=device-width,";
-                    webPage +="    initial-scale=1\">";
-                    webPage +="  </head>";
-                    webPage +="  <h1>ESP32 - Web Server</h1>";
-                    webPage +="  <p>BLUE LED";
-                    webPage +="    <a href=\"on1\">";
-                    webPage +="      <button>ON</button>";
-                    webPage +="    </a>&nbsp;";
-                    webPage +="    <a href=\"off1\">";
-                    webPage +="      <button>OFF</button>";
-                    webPage +="    </a>";
-                    webPage +="  </p>";
-                    webPage +="</html>";
-                    client.println(webPage);
-                    break;
-                }
-                if (c == '\n') {
-                    // анализируем буфер на наличие запросов 
-                    // если есть запрос, меняем состояние светодиода
-                    currentLineIsBlank = true;
-                    if (strstr(lineBuf, "GET /on1") > 0) {
-                        Serial.println("LED 1 ON");
-                        digitalWrite(LED_BLUE, HIGH);
-                    } else if (strstr(lineBuf, "GET /off1") > 0) {
-                        Serial.println("LED 1 OFF");
-                        digitalWrite(LED_BLUE, LOW);
-                    }
-                    // начинаем новую строку
-                    currentLineIsBlank = true;
-                    memset(lineBuf, 0, sizeof(lineBuf));
-                    charCount = 0;
-                } else if (c != '\r') {
-                    // в строке попался новый символ
-                    currentLineIsBlank = false;
-                }
-            }
-        }
-        // даем веб-браузеру время, чтобы получить данные
-        delay(1);
-        // закрываем соединение
-        client.stop();
-        Serial.println("client disconnected"); 
+        
+        WebRequestToBeesThermometer newWebRequest;
+        newWebRequest.handle(client);
     }
+    Alarm.delay(0);
 }
