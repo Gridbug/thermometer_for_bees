@@ -1,23 +1,24 @@
 #include <WiFi.h>
 
+#include <vector>
+
 #include "esp_log.h"
 #include "esp_system.h"
 #include "time.h"
-#include <vector>
 #include <TimeAlarms.h>
+#include "DHT.h"
+#include <ESPmDNS.h>
 
-#include "web_request_to_bees_thermometer.h"
+#include "bees_thermometer_web_server.h"
+#include "global_definitions.h"
 
-// указываем пины, к которым подключены светодиоды
-#define LED_BLUE 2
 
 const char* ssid = "AndroidAPEB55";
 const char* password = "pvtq4802";
 
 std::vector<float> localTemperatureLog;
 
-// инициализируем сервер на 80 порте
-WiFiServer server(80);
+BeesThermometerWebServer* webServer = nullptr;
 
 const char* ntpServer1 = "ntp7.ntp-servers.net";
 const char* ntpServer2 = "ntp6.ntp-servers.net";
@@ -27,6 +28,8 @@ const int   daylightOffset_sec = 0;
 uint32_t measuringInterval_sec = 5;
 
 hw_timer_t *My_timer = NULL;
+
+DHT dht22_sensor(DHT22_SENSOR_PIN, DHT22);
 
 void printLocalTime() {
   struct tm timeinfo;
@@ -45,28 +48,22 @@ void timeAvailable(struct timeval *t) {
   printLocalTime();
 }
 
-void measureTemperature(){
-  digitalWrite(LED_BLUE, !digitalRead(LED_BLUE));
+void measureTemperature() {
+//  digitalWrite(BLUE_LED_PIN, !digitalRead(BLUE_LED_PIN));
   printLocalTime();
 }
  
 void setup() {
-    pinMode(LED_BLUE, OUTPUT);
-    
     // инициализируем монитор порта
     Serial.begin(115200);
 
-    setTime(8,29,0,1,1,11);
+    pinMode(BLUE_LED_PIN, OUTPUT);
+
+    setTime(8, 29, 0, 1, 1, 11);
 
     //Настройка часов
     sntp_set_time_sync_notification_cb( timeAvailable );
-    //sntp_servermode_dhcp(1);
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
-
-//    My_timer = timerBegin(0, 80, true);
-//    timerAttachInterrupt(My_timer, &onTimer, true);
-//    timerAlarmWrite(My_timer, measuringIntervalInMicroseconds, true);
-//    timerAlarmEnable(My_timer); //Just Enable
 
     Alarm.timerRepeat(measuringInterval_sec, measureTemperature);
     
@@ -75,7 +72,8 @@ void setup() {
     Serial.println();
     Serial.print("Connecting to ");  
     Serial.println(ssid);
-    
+
+//    WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
     while(WiFi.status() != WL_CONNECTED) {
         Alarm.delay(500);
@@ -92,18 +90,20 @@ void setup() {
     //кэш на неделю измерений каждые 30 секунд
     localTemperatureLog.reserve(20160);
     localTemperatureLog.push_back(10);
-    
-    server.begin();
+
+    webServer = new BeesThermometerWebServer;
+    webServer->begin();
+
+    dht22_sensor.begin();
+
+    if (!MDNS.begin("gradusnik")) {
+        Serial.println("MDNS responder started for ");
+    }
 }
 
 void loop() {
     // анализируем канал связи на наличие входящих клиентов
-    WiFiClient client = server.available();
-    if (client) {
-        Serial.println("New client");  
-        
-        WebRequestToBeesThermometer newWebRequest;
-        newWebRequest.handle(client);
-    }
-    Alarm.delay(0);
+    webServer->handleClient();
+    
+    Alarm.delay(2);
 }
