@@ -1,6 +1,7 @@
 #include <WiFi.h>
 
 #include <vector>
+#include <queue>
 
 #include "esp_log.h"
 #include "esp_system.h"
@@ -16,7 +17,7 @@
 const char* ssid = "AndroidAPEB55";
 const char* password = "pvtq4802";
 
-std::vector<float> localTemperatureLog;
+//std::queue<float, std::vector> localTemperatureLog;
 
 BeesThermometerWebServer* webServer = nullptr;
 
@@ -50,6 +51,17 @@ void timeAvailable(struct timeval *t) {
 
 void measureTemperature() {
 //  digitalWrite(BLUE_LED_PIN, !digitalRead(BLUE_LED_PIN));
+  float t = dht22_sensor.readTemperature();
+  float h = dht22_sensor.readHumidity();
+
+  if (isnan(h) || isnan(t)) {
+    Serial.println(F("Failed to read from DHT sensor!"));
+    return;
+  }
+  
+  webServer->setTemperature(t);
+  webServer->setHumidity(h);
+  
   printLocalTime();
 }
  
@@ -74,22 +86,18 @@ void setup() {
     Serial.println(ssid);
 
 //    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
-    while(WiFi.status() != WL_CONNECTED) {
-        Alarm.delay(500);
-        Serial.print(".");
-    }
-    
-    Serial.println("");
-    Serial.println("Wi-Fi connected");  
-    Serial.println("IP-address: "); 
-    
-    // пишем IP-адрес в монитор порта   
-    Serial.println(WiFi.localIP());
-
-    //кэш на неделю измерений каждые 30 секунд
-    localTemperatureLog.reserve(20160);
-    localTemperatureLog.push_back(10);
+//    WiFi.begin(ssid, password);
+//    while(WiFi.status() != WL_CONNECTED) {
+//        Alarm.delay(500);
+//        Serial.print(".");
+//    }
+//    
+//    Serial.println("");
+//    Serial.println("Wi-Fi connected");  
+//    Serial.println("IP-address: "); 
+//    
+//    // пишем IP-адрес в монитор порта   
+//    Serial.println(WiFi.localIP());
 
     webServer = new BeesThermometerWebServer;
     webServer->begin();
@@ -97,7 +105,7 @@ void setup() {
     dht22_sensor.begin();
 
     if (!MDNS.begin("gradusnik")) {
-        Serial.println("MDNS responder started for ");
+        Serial.println("ERROR: Unable to start MDNS responder");
     }
 }
 
